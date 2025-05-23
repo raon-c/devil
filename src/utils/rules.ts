@@ -10,9 +10,16 @@ export const SURVIVAL_CHIP_GOAL = 75; // Number of chips required to be eligible
 export const SURVIVAL_CHIP_COST = 75; // Chips paid by a player to confirm survival
 export const BASE_BET_AMOUNT = 1; // Base bet amount at the start of each betting round (antes)
 
+// Snipe System Rules
+export const SNIPE_SUCCESS_REWARD = 5; // Chips awarded for successful snipe
+export const SNIPE_FAILURE_PENALTY = 3; // Chips deducted for failed snipe
+
 // Game Structure Rules
 export const DEFAULT_MAX_PLAYERS = 6; // Default maximum number of players in a game room
 export const MIN_PLAYERS_TO_START = 2; // Minimum number of players required to start a game
+
+// Betting Rules
+export const MAX_BET_MULTIPLIER_OF_LOWEST_CHIPS = 1; // 가장 적은 칩 보유자의 칩 수가 베팅 한도
 
 // Card Dealing Rules
 export const PRIVATE_CARDS_COUNT = 2;    // Number of private cards dealt to each player
@@ -37,3 +44,16 @@ export const HAND_RANKS_ORDER = [
 
 // Example: Minimum raise could be defined relative to the last bet or a fixed value.
 // export const MINIMUM_RAISE_AMOUNT = 1; // Or make it dynamic based on game state 
+
+/**
+ * 베팅 한도를 계산합니다 (가장 적은 칩을 가진 플레이어 기준)
+ * @param players 게임에 참여 중인 플레이어 목록
+ * @returns 최대 베팅 가능 금액
+ */
+export function calculateBettingLimit(players: { chips: number; is_in_game?: boolean }[]): number {
+  const activePlayers = players.filter(p => p.is_in_game !== false);
+  if (activePlayers.length === 0) return 0;
+  
+  const minChips = Math.min(...activePlayers.map(p => p.chips));
+  return minChips * MAX_BET_MULTIPLIER_OF_LOWEST_CHIPS;
+} 

@@ -66,7 +66,9 @@ export const SnipeModal: React.FC<SnipeModalProps> = ({
           {/* 최고 카드 선택 */}
           <div>
             <label className="label">
-              <span className="label-text font-semibold text-gray-700 dark:text-gray-300">가장 높은 카드 숫자</span>
+              <span className="label-text font-semibold text-gray-700 dark:text-gray-300">
+                {selectedRank === 'full-house' ? '트리플 카드 숫자' : '가장 높은 카드 숫자'}
+              </span>
             </label>
             <input
               type="number"
@@ -88,16 +90,17 @@ export const SnipeModal: React.FC<SnipeModalProps> = ({
             <div className="text-sm text-blue-800 dark:text-blue-200">
               <p><strong>예시:</strong></p>
               <p>&ldquo;스트레이트 7&rdquo;을 선언하면 상대방이 7 이상의 스트레이트를 만들어야 저격에 실패합니다.</p>
+              <p>&ldquo;플러시 9&rdquo;를 선언하면 상대방이 9 이상의 플러시를 만들어야 저격에 실패합니다.</p>
             </div>
           </div>
         </div>
 
         <div className="modal-action">
           <button 
-            className="btn btn-error" 
+            className="btn btn-warning" 
             onClick={handleSnipe}
           >
-            저격하기
+            🎯 저격 선언
           </button>
           <button 
             className="btn btn-ghost" 

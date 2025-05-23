@@ -13,6 +13,9 @@ import { GameLog, GameEvent, gameEventTemplates } from '@/components/game/GameLo
 import { GameEndModal } from '@/components/game/GameEndModal';
 import { LoadingSpinner } from '@/components/layout/LoadingSpinner';
 import { ErrorAlert } from '@/components/layout/ErrorAlert';
+import { calculateBettingLimit } from '@/utils/rules';
+import { SnipeResultsModal } from '@/components/game/SnipeResultsModal';
+import { SnipeStatus } from '@/components/game/SnipeStatus';
 
 const PlayerDisplay = ({ player, isCurrentUser, isCurrentTurn, game }: { 
   player: Player; 
@@ -52,6 +55,9 @@ const PlayerDisplay = ({ player, isCurrentUser, isCurrentTurn, game }: {
         {player.chips === 0 && !player.is_folded && player.is_in_game && (
           <div className="badge badge-warning badge-sm">올인</div>
         )}
+        {player.chips > 0 && player.current_round_bet && player.current_round_bet >= player.chips && (
+          <div className="badge badge-warning badge-sm">올인</div>
+        )}
         {game.dealer_player_id === player.id && (
           <div className="badge badge-info badge-sm">딜러</div>
         )}
@@ -66,7 +72,7 @@ const PlayerDisplay = ({ player, isCurrentUser, isCurrentTurn, game }: {
       )}
     </div>
     
-    {/* 카드 표시 */}
+    {/* 카드 표시 - 수정된 로직 */}
     {player.private_cards && player.private_cards.length > 0 && (
       <div className="mb-3">
         <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">개인 카드</p>
@@ -75,11 +81,16 @@ const PlayerDisplay = ({ player, isCurrentUser, isCurrentTurn, game }: {
             <CardComponent
               key={index}
               card={card}
-              isRevealed={isCurrentUser || player.is_folded === false}
+              isRevealed={isCurrentUser || game.game_phase === 'showdown'}
               size="sm"
             />
           ))}
         </div>
+        {!isCurrentUser && game.game_phase !== 'showdown' && (
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+            🃏 상대방의 카드 (뒷면)
+          </p>
+        )}
       </div>
     )}
 
@@ -103,10 +114,28 @@ const PlayerDisplay = ({ player, isCurrentUser, isCurrentTurn, game }: {
   </div>
 );
 
-const SharedCardsDisplay = ({ cards }: { cards: Card[] | null | undefined }) => (
+const SharedCardsDisplay = ({ cards, gamePhase }: { cards: Card[] | null | undefined; gamePhase: string }) => (
   <div className="border-2 border-dashed border-gray-300 dark:border-gray-600 p-6 my-4 rounded-xl bg-green-50 dark:bg-green-900/20 min-h-[120px]">
-    <h3 className="font-bold mb-4 text-center text-lg text-gray-700 dark:text-gray-300">공유 카드</h3>
-    {cards && cards.length > 0 ? (
+    <h3 className="font-bold mb-4 text-center text-lg text-gray-700 dark:text-gray-300">
+      공유 카드 (2장)
+    </h3>
+    {gamePhase === 'first_betting' ? (
+      <div className="flex justify-center items-center h-full">
+        <div className="text-center">
+          <div className="flex justify-center space-x-3 mb-3">
+            <div className="w-16 h-20 bg-blue-900 rounded-lg border-2 border-blue-700 flex items-center justify-center">
+              <span className="text-white text-2xl">🃏</span>
+            </div>
+            <div className="w-16 h-20 bg-blue-900 rounded-lg border-2 border-blue-700 flex items-center justify-center">
+              <span className="text-white text-2xl">🃏</span>
+            </div>
+          </div>
+          <p className="text-gray-500 dark:text-gray-400 text-sm">
+            1차 베팅 완료 후 공개됩니다
+          </p>
+        </div>
+      </div>
+    ) : cards && cards.length > 0 ? (
       <div className="flex justify-center items-center space-x-3">
         {cards.map((card, index) => (
           <CardComponent
@@ -125,23 +154,44 @@ const SharedCardsDisplay = ({ cards }: { cards: Card[] | null | undefined }) => 
         </p>
       </div>
     )}
+    <div className="mt-2 text-center">
+      <p className="text-xs text-gray-600 dark:text-gray-400">
+        💡 저격 홀덤: 개인 카드 2장 + 공유 카드 2장 = 총 4장으로 족보 완성
+      </p>
+    </div>
   </div>
 );
 
-const PotDisplay = ({ pot }: { pot: number }) => (
+const PotDisplay = ({ pot, sidePots }: { pot: number; sidePots?: Array<{amount: number; max_contribution: number; eligible_players: number}> }) => (
   <div className="my-4 text-center">
-    <h3 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Pot: {pot} chips</h3>
+    <h3 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+      메인 팟: {pot} chips
+    </h3>
+    {sidePots && sidePots.length > 0 && (
+      <div className="mt-3 p-3 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg border border-yellow-200 dark:border-yellow-600">
+        <h4 className="text-lg font-semibold text-yellow-800 dark:text-yellow-200 mb-2">사이드 팟</h4>
+        <div className="space-y-2">
+          {sidePots.map((sidePot, index) => (
+            <div key={index} className="text-sm text-yellow-700 dark:text-yellow-300">
+              사이드 팟 {index + 1}: {sidePot.amount}칩 (최대 기여: {sidePot.max_contribution}칩, 참여자: {sidePot.eligible_players}명)
+            </div>
+          ))}
+        </div>
+      </div>
+    )}
   </div>
 );
 
-const BettingControls = ({ onCall, onRaise, onFold, onCheck, canCheck, currentBet, playerChips }: { 
+const BettingControls = ({ onCall, onRaise, onFold, onCheck, onAllIn, canCheck, currentBet, playerChips, bettingLimit }: { 
   onCall: () => void; 
   onRaise: (amount: number) => void; 
   onFold: () => void; 
   onCheck: () => void;
+  onAllIn: () => void;
   canCheck: boolean;
   currentBet: number;
   playerChips: number;
+  bettingLimit: number;
 }) => {
   const [raiseAmount, setRaiseAmount] = useState(currentBet * 2 || 10);
 
@@ -150,12 +200,19 @@ const BettingControls = ({ onCall, onRaise, onFold, onCheck, canCheck, currentBe
       alert("보유 칩보다 많이 베팅할 수 없습니다.");
       return;
     }
+    if (raiseAmount > bettingLimit) {
+      alert(`베팅 한도(${bettingLimit}칩)를 초과할 수 없습니다.`);
+      return;
+    }
     if (raiseAmount <= currentBet && currentBet > 0) {
       alert("레이즈 금액은 현재 베팅액보다 커야 합니다.");
       return;
     }
     onRaise(raiseAmount);
   };
+
+  const effectiveMaxBet = Math.min(playerChips, bettingLimit);
+  const canAllIn = playerChips > 0;
 
   return (
     <div className="space-y-4 my-4 p-4 border-2 border-blue-200 dark:border-blue-700 rounded-xl shadow-lg bg-white dark:bg-gray-800">
@@ -185,6 +242,16 @@ const BettingControls = ({ onCall, onRaise, onFold, onCheck, canCheck, currentBe
           폴드
         </button>
       </div>
+
+      {/* 올인 버튼 */}
+      {canAllIn && (
+        <button 
+          onClick={onAllIn} 
+          className="btn btn-warning btn-block btn-lg"
+        >
+          🎲 올인 ({playerChips}칩)
+        </button>
+      )}
       
       {/* 레이즈 섹션 */}
       <div className="border-t border-gray-200 dark:border-gray-600 pt-4">
@@ -199,7 +266,7 @@ const BettingControls = ({ onCall, onRaise, onFold, onCheck, canCheck, currentBe
             value={raiseAmount}
             onChange={(e) => setRaiseAmount(parseInt(e.target.value, 10) || 0)}
             min={currentBet > 0 ? currentBet + 1 : 1}
-            max={playerChips}
+            max={effectiveMaxBet}
           />
           <button 
             onClick={handleRaise} 
@@ -214,6 +281,8 @@ const BettingControls = ({ onCall, onRaise, onFold, onCheck, canCheck, currentBe
           <div className="text-sm space-y-1 text-gray-700 dark:text-gray-300">
             <p><span className="font-semibold">보유 칩:</span> {playerChips}개</p>
             <p><span className="font-semibold">현재 콜 금액:</span> {currentBet}개</p>
+            <p><span className="font-semibold">베팅 한도:</span> {bettingLimit}개</p>
+            <p><span className="font-semibold">최대 베팅:</span> {effectiveMaxBet}개</p>
             {currentBet > 0 && (
               <p><span className="font-semibold">최소 레이즈:</span> {currentBet + 1}개</p>
             )}
@@ -238,6 +307,7 @@ export default function GamePage() {
   
   // Modal states
   const [showSnipeModal, setShowSnipeModal] = useState(false);
+  const [showSnipeResultsModal, setShowSnipeResultsModal] = useState(false);
   const [showRoundResultsModal, setShowRoundResultsModal] = useState(false);
   const [showSurvivalModal, setShowSurvivalModal] = useState(false);
   const [showGameRulesModal, setShowGameRulesModal] = useState(false);
@@ -246,6 +316,15 @@ export default function GamePage() {
   
   // Game events for logging
   const [gameEvents, setGameEvents] = useState<GameEvent[]>([]);
+  
+  // 저격 결과 데이터
+  const [snipeResults, setSnipeResults] = useState<Array<{
+    sniper_id: string;
+    sniper_name: string;
+    declared_rank: string;
+    declared_card: number;
+    success: boolean;
+  }>>([]);
   
   // Mock round result data (in real implementation, this would come from backend)
   const [roundResult, setRoundResult] = useState<{
@@ -487,6 +566,13 @@ export default function GamePage() {
 
       if (data && data.success) {
         console.log("Game start initiated:", data.message);
+        
+        // 게임 시작 성공 후 즉시 데이터 새로고침
+        await fetchGameData();
+        
+        // 성공 알림
+        const startEvent = gameEventTemplates.gameStart(players.filter(p => p.is_in_game).length);
+        setGameEvents(prev => [...prev, startEvent]);
       } else {
         setError(data?.message || 'Failed to start game.');
       }
@@ -509,8 +595,8 @@ export default function GamePage() {
     try {
       // console.log(`Attempting action: ${actionType}, amount: ${amount}`);
       
-      // Call RPC function for player action
-      const { data, error: rpcError } = await supabase.rpc('player_action', {
+      // Call RPC function for player action with all-in handling
+      const { data, error: rpcError } = await supabase.rpc('player_action_with_all_in', {
         p_game_id: gameId,
         p_player_id: currentUserPlayer.id,
         p_action: actionType,
@@ -522,26 +608,57 @@ export default function GamePage() {
       }
 
       if (data && data.success) {
-        // console.log("Player action successful:", data.message);
-        // Add event to game log
-        const event = gameEventTemplates.playerAction(
-          currentUserPlayer.nickname, 
-          actionType, 
-          amount
-        );
-        setGameEvents(prev => [...prev, event]);
+        console.log("Player action successful:", data.message);
+        
+        // 올인 액션인 경우 특별한 이벤트 로그
+        if (data.all_in) {
+          const allInEvent = gameEventTemplates.playerAction(
+            currentUserPlayer.nickname, 
+            `올인 (${amount}칩)`,
+            amount
+          );
+          setGameEvents(prev => [...prev, allInEvent]);
+        } else {
+          // 일반 액션 이벤트 로그
+          const event = gameEventTemplates.playerAction(
+            currentUserPlayer.nickname, 
+            actionType, 
+            amount
+          );
+          setGameEvents(prev => [...prev, event]);
+        }
+        
+        // 올인 상황 자동 진행 처리
+        if (data.all_in_check && data.all_in_check.auto_progressed) {
+          console.log("Auto-progression triggered:", data.all_in_check.message);
+          
+          const progressEvent = gameEventTemplates.roundStart(0);
+          setGameEvents(prev => [...prev, {
+            ...progressEvent,
+            type: 'round_start',
+            message: data.all_in_check.message
+          }]);
+          
+          // 저격 단계로 진행된 경우 UI 업데이트
+          if (data.all_in_check.next_phase === 'sniping') {
+            const snipeStartEvent = gameEventTemplates.roundStart(0);
+            setGameEvents(prev => [...prev, {
+              ...snipeStartEvent,
+              type: 'round_start',
+              message: '저격 페이즈가 시작되었습니다!'
+            }]);
+          }
+        }
       } else {
         setError(data?.message || `Failed to perform ${actionType}.`);
       }
     } catch (e: unknown) {
-      // console.error('Error performing player action:', e);
+      console.error('Error performing player action:', e);
       if (e instanceof Error) {
         setError(e.message);
       } else {
         setError(`An unknown error occurred while performing ${actionType}.`);
       }
-      // Fallback: Still show alert for development
-      alert(`Action: ${actionType}${amount ? ' (' + amount + ')' : ''} - Error: ${e instanceof Error ? e.message : 'Unknown error'}`);
     }
   };
 
@@ -573,9 +690,14 @@ export default function GamePage() {
   };
 
   const handleCheck = () => handlePlayerAction('check');
-  const handleCall = () => handlePlayerAction('call', game?.last_bet_amount);
+  const handleCall = () => handlePlayerAction('call', game?.last_bet_amount || 0);
   const handleRaise = (amount: number) => handlePlayerAction('raise', amount);
   const handleFold = () => handlePlayerAction('fold');
+  const handleAllIn = () => {
+    if (currentUserPlayer) {
+      handlePlayerAction('raise', currentUserPlayer.chips + (currentUserPlayer.current_round_bet || 0));
+    }
+  };
   
   // Modal handlers
   const handleSnipe = async (handRank: HandRank, highestCard: number) => {
@@ -583,22 +705,9 @@ export default function GamePage() {
     
     setError(null);
     try {
-      // Fix the targetPlayer selection to handle null boolean properly
-      const targetPlayer = players.find(p => 
-        p.id !== currentUserPlayer.id && 
-        p.is_in_game && 
-        p.is_folded !== true
-      );
-      
-      if (!targetPlayer) {
-        setError('저격할 대상이 없습니다.');
-        return;
-      }
-      
-      const { data, error: rpcError } = await supabase.rpc('declare_snipe', {
+      const { data, error: rpcError } = await supabase.rpc('declare_snipe_with_auto_check', {
         p_game_id: gameId,
         p_player_id: currentUserPlayer.id,
-        p_target_player_id: targetPlayer.id,
         p_hand_rank: handRank,
         p_highest_card: highestCard
       });
@@ -608,20 +717,39 @@ export default function GamePage() {
       }
 
       if (data && data.success) {
-        // console.log("Snipe declared successfully:", data.message);
+        console.log("Snipe declared successfully:", data.message);
         const event = gameEventTemplates.snipeDeclare(
           currentUserPlayer.nickname, 
-          targetPlayer.nickname,
+          `${handRank} ${highestCard}`,
           handRank, 
           highestCard
         );
         setGameEvents(prev => [...prev, event]);
         setShowSnipeModal(false);
+        
+        // 자동 완료 체크 결과 처리
+        if (data.auto_check_result && data.auto_check_result.completed) {
+          console.log("Snipe phase completed automatically!");
+          
+          // 저격 결과 표시
+          if (data.auto_check_result.snipe_results && data.auto_check_result.snipe_results.results) {
+            setSnipeResults(data.auto_check_result.snipe_results.results);
+            setShowSnipeResultsModal(true);
+          }
+          
+          // 완료 이벤트 로그
+          const completeEvent = gameEventTemplates.roundStart(0);
+          setGameEvents(prev => [...prev, {
+            ...completeEvent,
+            type: 'round_start',
+            message: '저격 페이즈가 완료되었습니다. 카드 공개!'
+          }]);
+        }
       } else {
         setError(data?.message || '저격 선언에 실패했습니다.');
       }
     } catch (e: unknown) {
-      // console.error('Error declaring snipe:', e);
+      console.error('Error declaring snipe:', e);
       if (e instanceof Error) {
         setError(e.message);
       } else {
@@ -630,12 +758,54 @@ export default function GamePage() {
     }
   };
 
-  const handleSnipePass = () => {
-    if (!currentUserPlayer) return;
-    // console.log('Snipe passed');
-    const event = gameEventTemplates.playerAction(currentUserPlayer.nickname, '저격 패스');
-    setGameEvents(prev => [...prev, event]);
-    alert('저격을 패스했습니다.');
+  const handleSnipePass = async () => {
+    if (!currentUserPlayer || !supabase) return;
+    
+    setError(null);
+    try {
+      const { data, error: rpcError } = await supabase.rpc('pass_snipe_with_auto_check', {
+        p_game_id: gameId,
+        p_player_id: currentUserPlayer.id
+      });
+
+      if (rpcError) {
+        throw rpcError;
+      }
+
+      if (data && data.success) {
+        console.log("Snipe passed successfully:", data.message);
+        const event = gameEventTemplates.playerAction(currentUserPlayer.nickname, '저격 패스');
+        setGameEvents(prev => [...prev, event]);
+        
+        // 자동 완료 체크 결과 처리
+        if (data.auto_check_result && data.auto_check_result.completed) {
+          console.log("Snipe phase completed automatically after pass!");
+          
+          // 저격 결과 표시
+          if (data.auto_check_result.snipe_results && data.auto_check_result.snipe_results.results) {
+            setSnipeResults(data.auto_check_result.snipe_results.results);
+            setShowSnipeResultsModal(true);
+          }
+          
+          // 완료 이벤트 로그
+          const completeEvent = gameEventTemplates.roundStart(0);
+          setGameEvents(prev => [...prev, {
+            ...completeEvent,
+            type: 'round_start',
+            message: '저격 페이즈가 완료되었습니다. 카드 공개!'
+          }]);
+        }
+      } else {
+        setError(data?.message || '저격 패스에 실패했습니다.');
+      }
+    } catch (e: unknown) {
+      console.error('Error passing snipe:', e);
+      if (e instanceof Error) {
+        setError(e.message);
+      } else {
+        setError('저격 패스 중 알 수 없는 오류가 발생했습니다.');
+      }
+    }
   };
 
   const handleSurvive = async (chipDistribution: Record<string, number>) => {
@@ -757,20 +927,18 @@ export default function GamePage() {
         
         if (data.game_ended) {
           // Game has ended, show game end modal
-          const winner = players.find(p => p.id === data.winner_id);
-          if (winner) {
-            const mockGameEndData = {
-              winners: [winner],
-              eliminatedPlayers: players.filter(p => p.id !== winner.id),
-              gameStats: {
-                totalRounds: game?.round_number || 0,
-                totalGameTime: '게임 완료',
-                finalPot: data.pot_won || 0
-              }
-            };
-            setGameEndData(mockGameEndData);
-            setShowGameEndModal(true);
-          }
+          const winner = data.winner_id ? players.find(p => p.id === data.winner_id) : undefined;
+          const gameEndData = {
+            winners: winner ? [winner] : [],
+            eliminatedPlayers: players.filter(p => p.id !== data.winner_id),
+            gameStats: {
+              totalRounds: game?.round_number || 0,
+              totalGameTime: '게임 완료',
+              finalPot: (data.final_pot as number) || 0
+            }
+          };
+          setGameEndData(gameEndData);
+          setShowGameEndModal(true);
         } else {
           // Round ended, continue to next round
           const event = gameEventTemplates.roundStart((game?.round_number || 0) + 1);
@@ -785,6 +953,163 @@ export default function GamePage() {
         setError(e.message);
       } else {
         setError('라운드 종료 중 알 수 없는 오류가 발생했습니다.');
+      }
+    }
+  };
+
+  // Add new function to handle starting snipe phase
+  const handleStartSnipePhase = async () => {
+    if (!supabase || !gameId) return;
+    
+    setError(null);
+    try {
+      const { data, error: rpcError } = await supabase.rpc('start_snipe_phase', {
+        p_game_id: gameId
+      });
+
+      if (rpcError) {
+        throw rpcError;
+      }
+
+      if (data && data.success) {
+        console.log("Snipe phase started successfully:", data.message);
+        const event = gameEventTemplates.roundStart(0); // Custom event for snipe phase start
+        setGameEvents(prev => [...prev, {
+          ...event,
+          type: 'round_start',
+          message: '저격 페이즈가 시작되었습니다.'
+        }]);
+      } else {
+        setError(data?.message || '저격 페이즈 시작에 실패했습니다.');
+      }
+    } catch (e: unknown) {
+      console.error('Error starting snipe phase:', e);
+      if (e instanceof Error) {
+        setError(e.message);
+      } else {
+        setError('저격 페이즈 시작 중 알 수 없는 오류가 발생했습니다.');
+      }
+    }
+  };
+
+  // Add function to handle showdown and next round
+  const handleShowdownAndNextRound = async () => {
+    if (!supabase || !gameId) return;
+    
+    setError(null);
+    try {
+      const { data, error: rpcError } = await supabase.rpc('complete_round_showdown', {
+        p_game_id: gameId
+      });
+
+      if (rpcError) {
+        throw rpcError;
+      }
+
+      if (data && data.success) {
+        console.log("Showdown processed successfully:", data);
+        
+        if (data.game_ended) {
+          // 게임 종료 - 최종 승자 결정
+          const winner = data.winner_id ? players.find(p => p.id === data.winner_id) : null;
+          const gameEndData = {
+            winners: winner ? [winner] : [],
+            eliminatedPlayers: players.filter(p => p.id !== data.winner_id && p.is_in_game),
+            gameStats: {
+              totalRounds: game?.round_number || 0,
+              totalGameTime: '게임 완료',
+              finalPot: data.final_pot || 0
+            }
+          };
+          setGameEndData(gameEndData);
+          setShowGameEndModal(true);
+          
+          // 최종 승리 이벤트 로그
+          const finalWinEvent = gameEventTemplates.roundEnd(data.winner_name || '알 수 없음', data.final_pot || 0);
+          setGameEvents(prev => [...prev, {
+            ...finalWinEvent,
+            type: 'game_start',
+            message: `🎉 ${data.winner_name}님이 게임에서 최종 승리했습니다!`
+          }]);
+          
+          // showdown 결과 로그
+          if (data.showdown_results) {
+            data.showdown_results.forEach((result: {
+              player_name: string;
+              hand_result: { hand_rank: string };
+              chips_after: number;
+            }) => {
+              const handEvent = gameEventTemplates.playerAction(
+                result.player_name,
+                `${result.hand_result.hand_rank} 완성`,
+                0
+              );
+              setGameEvents(prev => [...prev, handEvent]);
+            });
+          }
+        } else {
+          // 라운드 완료 - 다음 라운드 시작
+          const roundWinEvent = gameEventTemplates.roundEnd(data.round_winner_name || '알 수 없음', data.pot_won || 0);
+          setGameEvents(prev => [...prev, roundWinEvent]);
+          
+          // showdown 결과 로그
+          if (data.showdown_results) {
+            data.showdown_results.forEach((result: {
+              player_name: string;
+              hand_result: { hand_rank: string };
+              chips_after: number;
+            }) => {
+              const handEvent = gameEventTemplates.playerAction(
+                result.player_name,
+                `${result.hand_result.hand_rank} 완성`,
+                0
+              );
+              setGameEvents(prev => [...prev, handEvent]);
+            });
+          }
+          
+          // 저격 결과 로그
+          if (data.round_results) {
+            data.round_results.forEach((result: {
+              player_name: string;
+              snipe_declared?: { hand_rank: string; highest_card_number: number };
+              snipe_success?: boolean;
+            }) => {
+              if (result.snipe_declared) {
+                const snipeResultEvent = gameEventTemplates.snipeDeclare(
+                  result.player_name,
+                  result.snipe_success ? '저격 성공! (+5칩)' : '저격 실패 (-3칩)',
+                  result.snipe_declared.hand_rank as HandRank,
+                  result.snipe_declared.highest_card_number
+                );
+                setGameEvents(prev => [...prev, snipeResultEvent]);
+              }
+            });
+          }
+          
+          // 제거된 플레이어 로그
+          if (data.eliminated_count > 0) {
+            const eliminationEvent = gameEventTemplates.playerAction(
+              'System',
+              `${data.eliminated_count}명의 플레이어가 파산으로 제거되었습니다.`,
+              0
+            );
+            setGameEvents(prev => [...prev, eliminationEvent]);
+          }
+          
+          // 다음 라운드 시작 이벤트
+          const nextRoundEvent = gameEventTemplates.roundStart(data.next_round || (game?.round_number || 0) + 1);
+          setGameEvents(prev => [...prev, nextRoundEvent]);
+        }
+      } else {
+        setError(data?.message || 'showdown 처리에 실패했습니다.');
+      }
+    } catch (e: unknown) {
+      console.error('Error processing showdown:', e);
+      if (e instanceof Error) {
+        setError(e.message);
+      } else {
+        setError('showdown 처리 중 알 수 없는 오류가 발생했습니다.');
       }
     }
   };
@@ -855,11 +1180,20 @@ export default function GamePage() {
       )}
       
       <div className="mb-4 p-4 bg-white dark:bg-gray-800 rounded-lg shadow-md border border-gray-200 dark:border-gray-700">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 text-center">
           <div>
             <p className="text-sm text-gray-600 dark:text-gray-400">게임 상태</p>
             <span className={`badge ${game.status === 'playing' ? 'badge-info' : game.status === 'waiting' ? 'badge-success' : 'badge-ghost'}`}>
               {game.status === 'playing' ? '진행중' : game.status === 'waiting' ? '대기중' : '종료'}
+            </span>
+          </div>
+          <div>
+            <p className="text-sm text-gray-600 dark:text-gray-400">게임 페이즈</p>
+            <span className="badge badge-primary">
+              {game.game_phase === 'first_betting' ? '1차 베팅' : 
+               game.game_phase === 'second_betting' ? '2차 베팅' :
+               game.game_phase === 'sniping' ? '저격 단계' :
+               game.game_phase === 'showdown' ? '카드 공개' : '준비'}
             </span>
           </div>
           <div>
@@ -946,11 +1280,38 @@ export default function GamePage() {
               Test Game End
             </button>
             <button 
+              onClick={() => {
+                // Mock snipe results for testing
+                setSnipeResults([
+                  { sniper_id: '1', sniper_name: '플레이어1', declared_rank: 'straight', declared_card: 7, success: true },
+                  { sniper_id: '2', sniper_name: '플레이어2', declared_rank: 'two-pair', declared_card: 9, success: false }
+                ]);
+                setShowSnipeResultsModal(true);
+              }} 
+              className="btn btn-outline btn-warning btn-sm"
+            >
+              Test Snipe Results
+            </button>
+            <button 
+              onClick={handleStartSnipePhase} 
+              className="btn btn-outline btn-accent btn-sm"
+              disabled={!currentUserPlayer || game?.status !== 'playing'}
+            >
+              Start Snipe Phase (Debug)
+            </button>
+            <button 
               onClick={handleEndRound} 
               className="btn btn-outline btn-secondary btn-sm"
               disabled={!currentUserPlayer || game?.status !== 'playing'}
             >
               End Round (Debug)
+            </button>
+            <button 
+              onClick={handleShowdownAndNextRound} 
+              className="btn btn-outline btn-primary btn-sm"
+              disabled={!currentUserPlayer || game?.status !== 'playing'}
+            >
+              Test Showdown (Debug)
             </button>
           </div>
           <p className="text-xs mt-2 text-yellow-600 dark:text-yellow-300">
@@ -966,11 +1327,18 @@ export default function GamePage() {
         </div>
       )}
 
+      {/* 저격 현황 표시 */}
+      <SnipeStatus 
+        players={players} 
+        gamePhase={game.game_phase || ''} 
+        className="my-4"
+      />
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 my-4">
         <div className="lg:col-span-2 order-2 lg:order-1 bg-base-200 dark:bg-gray-800 p-4 rounded-lg shadow border border-gray-200 dark:border-gray-700">
           <h2 className="text-xl font-semibold mb-3 text-center text-gray-900 dark:text-gray-100">Game Table</h2>
-          <SharedCardsDisplay cards={game.shared_cards} />
-          <PotDisplay pot={game.betting_pot || 0} />
+          <SharedCardsDisplay cards={game.shared_cards} gamePhase={game.game_phase || ''} />
+          <PotDisplay pot={game.betting_pot || 0} sidePots={game.side_pots || undefined} />
           
           <h3 className="text-lg font-semibold mt-6 mb-2 text-gray-800 dark:text-gray-200">Other Players:</h3>
           {players.filter(p => p.user_id !== currentUserPlayer?.user_id && p.is_in_game === true).length > 0 ? (
@@ -1008,18 +1376,60 @@ export default function GamePage() {
                 </div>
               )}
               
-              {isMyTurn && game.status === 'playing' && (
+              {isMyTurn && game.status === 'playing' && game.game_phase !== 'sniping' && (
                 <BettingControls 
                   onCheck={handleCheck}
                   onCall={handleCall}
                   onRaise={handleRaise}
                   onFold={handleFold}
+                  onAllIn={handleAllIn}
                   canCheck={canCheck}
                   currentBet={game.last_bet_amount || 0}
                   playerChips={currentUserPlayer.chips || 0}
+                  bettingLimit={calculateBettingLimit(players)}
                 />
               )}
-              {!isMyTurn && game.status === 'playing' && <p className="mt-4 p-3 bg-info/20 text-info-content rounded-md text-center">Waiting for other player&apos;s turn...</p>}
+              
+              {/* 저격 페이즈에서만 저격 버튼 표시 */}
+              {game.game_phase === 'sniping' && isMyTurn && !currentUserPlayer.declared_snipe && (
+                <div className="mt-4 p-4 bg-yellow-50 dark:bg-yellow-900/20 border-2 border-yellow-300 dark:border-yellow-600 rounded-lg">
+                  <h4 className="font-bold text-yellow-800 dark:text-yellow-200 mb-3 text-center">
+                    🎯 당신의 저격 턴입니다
+                  </h4>
+                  <p className="text-sm text-yellow-600 dark:text-yellow-400 mb-4 text-center">
+                    족보를 저격하거나 패스를 선택하세요
+                  </p>
+                  <div className="flex space-x-2 justify-center">
+                    <button 
+                      onClick={() => setShowSnipeModal(true)} 
+                      className="btn btn-warning btn-lg"
+                    >
+                      🎯 저격하기
+                    </button>
+                    <button 
+                      onClick={handleSnipePass} 
+                      className="btn btn-outline btn-lg"
+                    >
+                      패스
+                    </button>
+                  </div>
+                </div>
+              )}
+              
+              {game.game_phase === 'sniping' && !isMyTurn && (
+                <div className="mt-4 p-4 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg">
+                  <p className="text-center text-gray-600 dark:text-gray-400">
+                    다른 플레이어의 저격 턴을 기다리는 중...
+                  </p>
+                  {game.current_turn_player_id && (
+                    <p className="text-center text-sm font-medium text-gray-700 dark:text-gray-300 mt-2">
+                      현재 턴: {players.find(p => p.id === game.current_turn_player_id)?.nickname || '알 수 없음'}
+                    </p>
+                  )}
+                </div>
+              )}
+              
+              {!isMyTurn && game.status === 'playing' && game.game_phase !== 'sniping' && <p className="mt-4 p-3 bg-info/20 text-info-content rounded-md text-center">Waiting for other player&apos;s turn...</p>}
             </>
           )}
           {!currentUserPlayer && <p className="text-warning">You are observing. Player actions are not available.</p>} 
@@ -1071,6 +1481,15 @@ export default function GamePage() {
           }}
         />
       )}
+
+      <SnipeResultsModal
+        isOpen={showSnipeResultsModal}
+        snipeResults={snipeResults}
+        onContinue={() => {
+          setShowSnipeResultsModal(false);
+          handleShowdownAndNextRound();
+        }}
+      />
     </div>
   );
 } 

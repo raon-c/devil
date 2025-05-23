@@ -1,6 +1,21 @@
+'use client';
+
 import React from 'react';
 import { Player, HandRank } from '@/types/game';
 import { Card as CardComponent } from './Card';
+
+interface ShowdownResult {
+  player_name: string;
+  hand_result: {
+    hand_rank: HandRank;
+    rank_determining_cards: number[];
+  };
+  chips_after: number;
+  snipe_result?: {
+    declared: { hand_rank: HandRank; highest_card_number: number };
+    success: boolean;
+  };
+}
 
 interface RoundResult {
   winner: Player;
@@ -19,6 +34,7 @@ interface RoundResult {
     actualRank: HandRank;
     success: boolean;
   }>;
+  showdownResults?: ShowdownResult[];
 }
 
 interface RoundResultsModalProps {
@@ -36,6 +52,19 @@ const HAND_RANK_LABELS: Record<HandRank, string> = {
   'two-pair': '투페어',
   'one-pair': '원페어',
   'high-card': '하이카드'
+};
+
+const getHandRankDisplay = (rank: HandRank): string => {
+  const rankMap: Record<HandRank, string> = {
+    'four-of-a-kind': '포카드',
+    'full-house': '풀하우스',
+    'straight': '스트레이트',
+    'three-of-a-kind': '트리플',
+    'two-pair': '투페어',
+    'one-pair': '원페어',
+    'high-card': '하이카드'
+  };
+  return rankMap[rank] || rank;
 };
 
 export const RoundResultsModal: React.FC<RoundResultsModalProps> = ({
@@ -64,6 +93,38 @@ export const RoundResultsModal: React.FC<RoundResultsModalProps> = ({
             {HAND_RANK_LABELS[roundResult.winningHand]} - {roundResult.chipsWon}칩 획득
           </p>
         </div>
+
+        {/* showdown 결과 */}
+        {roundResult.showdownResults && roundResult.showdownResults.length > 0 && (
+          <div className="mb-6">
+            <h4 className="text-lg font-semibold mb-3">🃏 모든 플레이어 핸드</h4>
+            <div className="space-y-3">
+              {roundResult.showdownResults.map((result, index) => (
+                <div key={index} className="bg-base-200 p-4 rounded-lg flex justify-between items-center">
+                  <div>
+                    <span className="font-semibold">{result.player_name}</span>
+                    <span className="ml-3 text-gray-600">
+                      {getHandRankDisplay(result.hand_result.hand_rank)}
+                    </span>
+                    {result.hand_result.rank_determining_cards && (
+                      <span className="ml-2 text-sm text-gray-500">
+                        ({result.hand_result.rank_determining_cards.join(', ')})
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-right">
+                    <div className="font-semibold">{result.chips_after} 칩</div>
+                    {result.snipe_result && (
+                      <div className={`text-sm ${result.snipe_result.success ? 'text-green-600' : 'text-red-600'}`}>
+                        저격 {result.snipe_result.success ? '성공 (+5)' : '실패 (-3)'}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* 모든 플레이어의 최종 패 */}
         <div className="mb-6">

@@ -178,10 +178,25 @@ export const gameEventTemplates = {
   playerSurvive: (playerName: string) => 
     createGameEvent('player_survive', '생존을 확정했습니다', undefined, playerName),
   
-  snipeDeclare: (sniperName: string, targetName: string, handRank: string, highCard: number) => 
-    createGameEvent('snipe_declare', 
-      `${targetName}을(를) ${handRank} ${highCard}로 저격 선언`, 
-      undefined, sniperName),
+  snipeDeclare: (sniperName: string, targetInfo: string, handRank: string, highCard: number) => {
+    // 족보를 한국어로 번역
+    const getHandRankKorean = (rank: string): string => {
+      const translations: Record<string, string> = {
+        'four-of-a-kind': '포카드',
+        'full-house': '풀하우스',
+        'straight': '스트레이트',
+        'three-of-a-kind': '트리플',
+        'two-pair': '투페어',
+        'one-pair': '원페어',
+        'high-card': '하이카드'
+      };
+      return translations[rank] || rank;
+    };
+    
+    return createGameEvent('snipe_declare', 
+      `${getHandRankKorean(handRank)} ${highCard} 저격 선언`, 
+      undefined, sniperName);
+  },
   
   snipeResult: (sniperName: string, targetName: string, success: boolean) => 
     createGameEvent('snipe_result', 

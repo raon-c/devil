@@ -45,21 +45,28 @@ export interface Player {
 }
 
 export interface Game {
-  id: string; // UUID
-  name: string; // 추가된 속성
-  max_players: number; // 추가된 속성
-  created_at: string; // Timestamp
+  id: string;
+  name: string;
   status: 'waiting' | 'playing' | 'finished';
-  current_turn_player_id?: string | null; // UUID
-  dealer_player_id?: string | null; // UUID
-  round_number: number;
+  max_players: number;
+  created_at: string;
+  updated_at: string;
+  created_by: string;
   betting_pot: number;
-  shared_cards: Card[];
-  last_bet_amount?: number;
-  min_chips_for_betting_limit?: number;
-  game_winner_player_id?: string | null; // UUID
-  last_action_timestamp?: string; // Timestamp
-  players?: Player[]; // Often fetched separately or as part of a join
+  shared_cards: Card[] | null;
+  round_number: number;
+  dealer_player_id: string | null;
+  current_turn_player_id: string | null;
+  last_bet_amount: number | null;
+  game_phase: 'waiting' | 'first_betting' | 'second_betting' | 'sniping' | 'showdown' | 'finished' | null;
+  phase_started_at: string | null;
+  snipe_deadline: string | null;
+  game_winner_player_id: string | null;
+  side_pots?: Array<{
+    amount: number;
+    max_contribution: number;
+    eligible_players: number;
+  }> | null;
 }
 
 export interface GameRoom {

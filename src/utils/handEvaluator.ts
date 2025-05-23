@@ -1,4 +1,4 @@
-import { Card, ActualHandResult, HandRank } from '../types/game';
+import { Card, ActualHandResult } from '../types/game';
 import { HAND_RANKS_ORDER } from './rules';
 
 // Type for the return of individual findXYZ functions before private_cards_for_tiebreak is added
@@ -31,15 +31,6 @@ function getCombinations<T>(array: T[], k: number): T[][] {
   backtrack(0, []);
   return result;
 }
-
-// --- Internal Hand Evaluation Functions (to be implemented) ---
-// These functions will take 5 cards and return a partial ActualHandResult if the hand is found, otherwise null.
-
-// interface PotentialHandResult {
-//   hand_rank: HandRank;
-//   rank_determining_cards: number[];
-//   kickers: number[];
-// }
 
 function findFourOfAKind(fiveCards: Card[]): PotentialHandDetails | null {
   const counts: { [key: number]: number } = {};
@@ -290,9 +281,6 @@ export function evaluateHand(sixCards: Card[], privatePlayerCards: Card[]): Actu
     for (const rank of HAND_RANKS_ORDER) {
       let currentRankDetails: PotentialHandDetails | null = null;
 
-      // TODO: Call the specific findXYZ functions here
-      // Example structure:
-      // if (rank === "four-of-a-kind") { currentRankDetails = findFourOfAKind(fiveCardCombo); }
       if (rank === "four-of-a-kind") {
         currentRankDetails = findFourOfAKind(fiveCardCombo);
       } else if (rank === "full-house") {
@@ -349,11 +337,4 @@ export function evaluateHand(sixCards: Card[], privatePlayerCards: Card[]): Actu
   }
   
   return bestHandEvaluation;
-}
-
-// TODO:
-// 1. Implement all `find<RankName>(fiveCards: Card[])` helper functions.
-//    - These should correctly identify the hand and populate `rank_determining_cards` and `kickers`.
-//    - Cards in `rank_determining_cards` and `kickers` should be sorted (usually high to low).
-// 2. Integrate `compareEvaluations` into the main loop of `evaluateHand`.
-// 3. Add thorough unit tests for all helper functions and `evaluateHand` with various card combinations. 
+} 
