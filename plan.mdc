@@ -1,0 +1,280 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# 저격 홀덤 게임 개발 계획
+
+## 1. 기술 스택 정의
+
+*   **프론트엔드**: React (Vite), TypeScript, Next.js 15
+*   **백엔드/데이터베이스**: Supabase (Realtime Database, Auth, Functions - 필요시)
+*   **상태 관리**: Zustand (React Context API도 고려 가능)
+*   **게임 상태 관리**: Finite State Machine, XState
+*   **UI 라이브러리**: Tailwind CSS v4, Daisy UI
+*   **라우팅**: 
+
+## 2. 데이터베이스 스키마 설계 (Supabase)
+
+*   **`games`**: 게임방 정보
+    *   `id`: UUID (PK) - 게임방 고유 ID
+    *   `created_at`: Timestamp - 생성 시간
+    *   `status`: Enum (`waiting`, `playing`, `finished`) - 게임 상태
+    *   `current_turn_player_id`: UUID (FK to `players.id`) - 현재 턴인 플레이어 ID
+    *   `dealer_player_id`: UUID (FK to `players.id`) - 현재 라운드 딜러 (선 플레이어 결정용)
+    *   `round_number`: Integer - 현재 라운드 번호
+    *   `betting_pot`: Integer - 현재 라운드 베팅 총액
+    *   `shared_cards`: JSON Array (`Card[]`) - 공개된 공유 카드 (최대 4장)
+        *   `Card`: `{ suit: string, number: number }` (suit은 카드 세트 구분용, 4세트)
+    *   `last_bet_amount`: Integer - 현재 베팅 페이즈의 마지막 베팅액 (다음 플레이어가 콜 하거나 레이즈할 기준)
+    *   `min_chips_for_betting_limit`: Integer - 현재 베팅 라운드에서 (폴드하지 않은) 플레이어 중 가장 적은 칩 수 (베팅 상한선)
+    *   `game_winner_player_id`: UUID (FK to `players.id`, nullable) - 최종 게임 승자
+    *   `last_action_timestamp`: Timestamp - 마지막 액션 시간 (타임아웃 등 관리에 사용 가능)
+
+*   **`players`**: 게임에 참여한 플레이어 정보
+    *   `id`: UUID (PK) - 플레이어 고유 ID (Supabase user ID와 다름, 게임 내 플레이어 식별자)
+    *   `user_id`: UUID (FK to `auth.users.id`) - Supabase 사용자 ID
+    *   `game_id`: UUID (FK to `games.id`) - 참여한 게임방 ID
+    *   `nickname`: Text - 플레이어 닉네임
+    *   `chips`: Integer - 보유 칩 개수 (초기 60개)
+    *   `private_cards`: JSON Array (`Card[]`) - 개인 카드 2장
+    *   `turn_order`: Integer - 게임 진행 순서 (0부터 시작, 0이 선)
+    *   `is_survived`: Boolean (default: false) - 생존 확정 여부
+    *   `current_round_bet`: Integer (default: 0) - 현재 라운드에서 해당 플레이어가 베팅한 총 칩
+    *   `is_folded`: Boolean (default: false) - 현재 라운드 폴드 여부
+    *   `declared_snipe`: JSON (nullable) - 저격 선언한 족보
+        *   `{ hand_rank: string, highest_card_number: number }` (예: `{ hand_rank: "straight", highest_card_number: 8 }`)
+    *   `actual_hand_result`: JSON (nullable) - 실제 족보 정보 (라운드 종료 시 계산)
+        *   `{ hand_rank: string, rank_determining_cards: number[], kickers: number[], private_cards_for_tiebreak: number[] }`
+            *   `hand_rank`: 포카드, 풀하우스 등
+            *   `rank_determining_cards`: 족보를 결정하는 주요 카드 숫자들 (예: 포카드의 경우 [7], 풀하우스의 경우 [7, 2])
+            *   `kickers`: 족보 구성 후 남은 카드들 중 높은 순서 (하이카드 비교용)
+            *   `private_cards_for_tiebreak`: 개인 카드 숫자 [높은것, 낮은것] (동점자 규칙 2, 3용)
+    *   `is_in_game`: Boolean (default: true) - 현재 게임에 참여 중인지 (칩이 0개가 되어 탈락했는지 등)
+    *   `last_game_action`: Enum (nullable) (`bet`, `call`, `fold`, `raise`, `check`) - 마지막으로 한 액션
+
+*   **`game_rounds`** (선택적, 상세 로그 또는 복기 기능용)
+    *   `id`: BIGSERIAL (PK)
+    *   `game_id`: UUID (FK to `games.id`)
+    *   `round_number`: Integer
+    *   `player_actions`: JSON Array - 해당 라운드 플레이어들의 액션 로그
+    *   `winner_player_id`: UUID (FK to `players.id`)
+    *   `pot_details`: JSON - 해당 라운드 팟 분배 상세
+
+## 3. 주요 기능 구현
+
+*   **로비 (Lobby)**
+    *   게임방 생성 (인원 제한 설정 가능)
+    *   게임방 목록 조회 및 참여
+    *   플레이어 준비 상태 표시
+*   **게임 준비 (Game Setup)**
+    *   플레이어 입장 (최소 2명, 최대 N명 - 예: 6명)
+    *   게임 시작 조건 충족 시 자동/방장 시작
+    *   순서 정하기: 각 플레이어 카드 1장씩 뽑아 높은 숫자가 선. (같으면 반복)
+    *   초기 칩 분배 (각 플레이어 60개)
+    *   카드 덱 초기화 (1-10 숫자 카드 4세트, 총 40장) 및 셔플
+*   **라운드 진행 (Round Flow)**
+    *   **라운드 시작**:
+        *   `games.round_number` 증가
+        *   `players` 테이블의 `is_folded`, `current_round_bet`, `declared_snipe`, `actual_hand_result` 초기화
+        *   딜러 변경 (시계 방향)
+    *   **기본 베팅**: 모든 (폴드하지 않은) 플레이어 칩 1개씩 자동 베팅. `betting_pot` 업데이트. `players.chips`, `players.current_round_bet` 업데이트.
+    *   **개인 카드 분배**: 각 플레이어에게 비공개 카드 2장 분배. 덱에서 카드 제거.
+    *   **공유 카드 공개 (1차)**: 공유 카드 2장 공개 (`games.shared_cards`). 덱에서 카드 제거.
+    *   **1차 베팅**:
+        *   선 플레이어부터 시계 방향으로 진행 (`games.current_turn_player_id` 업데이트)
+        *   베팅 옵션:
+            *   `Check`: 앞선 베팅이 없을 경우
+            *   `Call`: 앞선 베팅만큼 베팅
+            *   `Raise`: 앞선 베팅보다 더 많이 베팅 (최소 레이즈 금액 규칙 필요 - 예: 이전 레이즈 금액만큼)
+            *   `Fold`: 라운드 포기
+        *   베팅 상한선: `games.min_chips_for_betting_limit` (해당 라운드 시작 시, 폴드하지 않은 플레이어 중 가장 칩이 적은 플레이어의 칩 개수)
+        *   모든 (폴드하지 않은) 플레이어가 동일한 금액을 베팅했거나, 한 명 빼고 모두 폴드하면 베팅 종료.
+    *   **공유 카드 공개 (2차)**: 공유 카드 2장 추가 공개 (`games.shared_cards`에 추가, 총 4장). 덱에서 카드 제거.
+    *   **2차 베팅**: 1차 베팅과 동일하게 진행.
+*   **족보 결정 (Hand Determination)**
+    *   각 (폴드하지 않은) 플레이어는 공유 카드 4장 + 개인 카드 2장 (총 6장)으로 만들 수 있는 최상의 족보 결정.
+    *   `players.actual_hand_result`에 족보 정보 저장.
+    *   족보 종류 (높은 순):
+        1.  포카드: [7, 7, 7, 7, 2, 1] -> rank_determining_cards: [7], kickers: [2,1]
+        2.  풀하우스: [7, 7, 7, 2, 2, 1] -> rank_determining_cards: [7, 2] (트리플 숫자, 페어 숫자)
+        3.  스트레이트: [10, 9, 8, 7, 6, 1] -> rank_determining_cards: [10,9,8,7,6] (가장 높은 숫자부터)
+        4.  트리플: [7, 7, 7, 4, 2, 1] -> rank_determining_cards: [7], kickers: [4,2,1]
+        5.  투페어: [7, 7, 2, 2, 9, 1] -> rank_determining_cards: [7, 2], kickers: [9,1] (높은 페어, 낮은 페어 순)
+        6.  원페어: [7, 7, 2, 4, 9, 1] -> rank_determining_cards: [7], kickers: [9,4,2,1]
+        7.  하이카드: [9, 7, 6, 4, 2, 1] -> rank_determining_cards: [], kickers: [9,7,6,4,2,1]
+*   **저격 (Sniping)**
+    *   2차 베팅 종료 후, 개인 카드 공개 전.
+    *   선 플레이어부터 시계 방향으로 진행.
+    *   원하는 족보 하나를 저격 또는 패스.
+    *   저격 시, 족보와 가장 높은 숫자 선언 (`players.declared_snipe`에 저장).
+        *   예: 45678 스트레이트 -> `{ hand_rank: "straight", highest_card_number: 8 }`
+        *   예: 77553 투페어 -> `{ hand_rank: "two-pair", highest_card_number: 7 }` (높은 페어의 숫자)
+        *   풀하우스 예외: 트리플에 해당하는 숫자 선언. 77733 -> `{ hand_rank: "full-house", highest_card_number: 7 }`
+*   **결과 처리 (Showdown & Payout)**
+    *   모든 (폴드하지 않은) 플레이어 개인 카드 공개.
+    *   승자 결정:
+        1.  저격 성공 여부 확인: 플레이어 A의 `actual_hand_result`가 플레이어 B의 `declared_snipe`와 일치하면, 플레이어 A의 족보는 최하위로 간주. (여러 명에게 저격당해도 동일)
+        2.  저격 처리 후, 남은 플레이어들 중 가장 높은 `actual_hand_result`를 가진 플레이어가 팟(`games.betting_pot`) 획득.
+        3.  동점자 규칙:
+            *   **등급**: `actual_hand_result.hand_rank` 비교.
+            *   **족보 숫자**: `actual_hand_result.rank_determining_cards` 비교. (예: 9 풀하우스 > 7 풀하우스)
+                *   스트레이트: 가장 높은 숫자 비교.
+                *   투페어: 높은 페어 숫자, 같으면 낮은 페어 숫자, 같으면 키커.
+                *   기타: 주요 숫자 비교, 같으면 키커 카드 순차 비교 (`actual_hand_result.kickers`).
+            *   **개인 카드 높은 숫자**: `actual_hand_result.private_cards_for_tiebreak[0]` 비교.
+            *   **개인 카드 다른 숫자**: `actual_hand_result.private_cards_for_tiebreak[1]` 비교.
+            *   **무승부**: 위 모든 조건이 같거나, 모든 (남은) 플레이어의 족보가 저격당했을 경우.
+                *   `games.betting_pot`을 무승부 플레이어들이 똑같이 나눠 가짐.
+                *   나머지 칩은 베팅 순서가 빠른 순서대로 1개씩.
+    *   `players.chips` 업데이트. `games.betting_pot` 초기화.
+*   **생존 확정 (Survival)**
+    *   라운드 종료 후, 플레이어 칩이 75개 이상이 되면 생존 확정 선택 가능.
+    *   선택 시, 칩 75개를 지불 (`players.chips` 차감). `players.is_survived`를 true로.
+    *   남은 칩은 다른 (생존하지 않은) 플레이어에게 원하는 대로 분배. (칩이 0개인 플레이어에게 최소 1개는 줘야 함 - UI로 처리).
+    *   생존 확정자는 더 이상 게임에 참여하지 않음 (관전 또는 퇴장).
+*   **게임 종료 (Game End)**
+    *   N-1명의 플레이어가 생존을 확정하거나 탈락하여 1명만 남았을 경우, 그 마지막 1명이 탈락자.
+    *   또는 특정 라운드 수 도달 시 (룰에 명시되지 않았으므로, 플레이어 수에 따라 조절 가능).
+    *   `games.status`를 `finished`로, `games.game_winner_player_id` 설정 (생존자 규칙이므로, 탈락자가 아닌 마지막까지 남은 사람들의 승리?) - 이 부분은 룰 기반으로 "탈락자"를 정하는 것이므로, 명시적인 "승자"는 생존자들.
+*   **칩 부족 처리**
+    *   라운드 도중 칩이 0개가 된 플레이어는 즉시 탈락 (`players.is_in_game = false`). 올인 상태로 라운드 지속.
+
+## 4. React 컴포넌트 구조 (예시)
+
+*   **참고**: 아래 컴포넌트들은 DaisyUI의 컴포넌트 클래스(예: `btn`, `modal`, `card`, `table`, `navbar` 등)를 적극 활용하여 구현하며, 필요한 경우 Tailwind CSS 유틸리티 클래스로 커스터마이징합니다.
+
+*   `App.tsx`: 라우팅 (`react-router-dom`), 전역 상태 제공자 (Zustand), Supabase 클라이언트 초기화, 전역 CSS (Tailwind & DaisyUI 설정 포함)
+*   `pages/`:
+    *   `AuthPage.tsx`: 로그인/회원가입
+    *   `LobbyPage.tsx`: 게임방 목록, 생성, 참여 UI
+    *   `GamePage.tsx`: 실제 게임 진행 UI (`game_id`를 파라미터로 받음)
+*   `components/`:
+    *   `layout/`: `Navbar.tsx`, `Footer.tsx` 등
+    *   `auth/`: `LoginForm.tsx`, `SignupForm.tsx`
+    *   `lobby/`: `GameRoomList.tsx`, `CreateGameRoomModal.tsx`
+    *   `game/`:
+        *   `GameTable.tsx`: 전체 게임판 레이아웃
+        *   `PlayerDisplay.tsx`: 각 플레이어 정보 (닉네임, 칩, 카드(뒷면/앞면), 턴 표시, 저격 표시 등)
+        *   `SharedCardsDisplay.tsx`: 공유 카드 표시
+        *   `PotDisplay.tsx`: 현재 팟 금액 표시
+        *   `BettingControls.tsx`: 베팅 관련 버튼 (Check, Call, Raise, Fold) 및 금액 입력
+        *   `SnipeModal.tsx`: 저격 선언 UI
+        *   `RoundResultsModal.tsx`: 라운드 결과 (승자, 획득 칩, 족보 등) 표시
+        *   `SurvivalModal.tsx`: 생존 확정 및 칩 분배 UI
+        *   `GameLog.tsx`: 게임 주요 이벤트 로그 표시 (선택 사항)
+        *   `Card.tsx`: 개별 카드 UI 컴포넌트
+*   `hooks/`:
+    *   `useAuth.ts`: Supabase Auth 관련 훅
+    *   `useGame.ts`: 특정 게임방의 상태 구독 및 업데이트 로직 (Supabase Realtime)
+    *   `usePlayerActions.ts`: 플레이어 액션 (베팅, 저격 등)을 서버로 보내는 함수들
+*   `utils/`:
+    *   `deck.ts`: 카드 덱 생성, 셔플, 카드 분배 로직
+    *   `handEvaluator.ts`: 족보 판정 로직 (가장 중요하고 복잡한 부분)
+    *   `rules.ts`: 게임 규칙 관련 상수 및 헬퍼 함수
+*   `types/`:
+    *   `supabase.ts`: `supabase gen types typescript > types/supabase.ts` 로 생성된 타입
+    *   `game.ts`: 게임 관련 커스텀 타입 (Card, HandRank, PlayerState 등)
+
+## 5. Supabase Realtime 연동
+
+*   **구독**:
+    *   `GamePage.tsx`에서 현재 `game_id`에 해당하는 `games` 테이블 row 구독.
+    *   `GamePage.tsx`에서 현재 `game_id`에 해당하는 `players` 테이블 rows 구독.
+    *   상태 변경 시 (예: `games.current_turn_player_id`, `players.chips`, `games.shared_cards`) UI 자동 업데이트.
+*   **업데이트**:
+    *   플레이어 액션 (베팅, 폴드, 저격) 발생 시, Supabase Function을 호출하거나 클라이언트에서 직접 DB 업데이트 (보안 고려 필요 - Function 권장).
+    *   턴 변경, 카드 분배, 팟 계산 등 주요 게임 로직은 Supabase Function (Edge Functions)으로 처리하여 데이터 일관성 및 보안 강화.
+        *   예: `dealCards`, `processBet`, `determineRoundWinner`, `attemptSurvival` 등의 함수.
+
+## 6. 핵심 로직 구현 (주로 Supabase Functions 또는 `utils/`)
+
+*   **카드 덱 관리 (`deck.ts`)**:
+    *   `createDeck()`: 4세트의 1-10 카드 생성.
+    *   `shuffleDeck(deck: Card[]): Card[]`: 덱 셔플 (Fisher-Yates 알고리즘).
+    *   `dealCardsFromDeck(deck: Card[], count: number): { dealtCards: Card[], remainingDeck: Card[] }`.
+*   **족보 판정 로직 (`handEvaluator.ts`)**:
+    *   `evaluateHand(cards: Card[]): ActualHandResult`: 6장의 카드로 만들 수 있는 최상의 족보와 관련 정보 반환.
+        *   모든 카드 조합 (6C5, 6C6 등) 고려하여 포카드, 풀하우스 등 순으로 체크.
+        *   각 족보 판별 함수 구현 (isFourOfAKind, isFullHouse 등).
+        *   동점자 규칙에 필요한 모든 정보 (`rank_determining_cards`, `kickers`, `private_cards_for_tiebreak`) 포함.
+*   **베팅 로직 (Supabase Function - `processBet`)**:
+    *   플레이어 베팅 유효성 검사 (베팅 가능 금액, 턴 여부, 베팅 상한선 등).
+    *   `players.chips`, `players.current_round_bet`, `games.betting_pot`, `games.last_bet_amount` 업데이트.
+    *   다음 턴 플레이어 결정.
+*   **저격 로직 (Supabase Function - `declareSnipe`)**:
+    *   저격 선언 유효성 검사.
+    *   `players.declared_snipe` 업데이트.
+*   **승자 판정 로직 (Supabase Function - `determineRoundWinner`)**:
+    *   모든 (폴드하지 않은) 플레이어의 `actual_hand_result` 계산.
+    *   저격 성공 여부 반영하여 족보 조정.
+    *   동점자 규칙 포함하여 최종 승자(들) 결정.
+    *   팟 분배 및 `players.chips` 업데이트.
+*   **생존/탈락 처리 로직 (Supabase Function - `attemptSurvival`, `processElimination`)**
+
+## 7. UI/UX 고려사항
+
+*   **직관성**: 현재 턴, 자신의 카드, 공유 카드, 팟 크기, 다른 플레이어 칩 상황 등을 명확히 인지.
+*   **피드백**: 액션에 대한 즉각적인 시각적/청각적 피드백 (카드 움직임, 칩 변화 등).
+*   **애니메이션**: 부드러운 카드 딜링, 칩 이동 애니메이션으로 몰입감 증대.
+*   **반응형 디자인**: 다양한 화면 크기 지원 (PC 우선).
+*   **명확한 규칙 안내**: 게임 중 필요시 간단한 룰 요약 제공 (물음표 아이콘 등).
+*   **저격 UI**: 어떤 족보를 어떤 숫자로 저격할지 쉽게 선택할 수 있도록.
+*   **생존 시 칩 분배 UI**: 직관적으로 칩을 분배할 수 있도록.
+*   **DaisyUI 테마 활용**: DaisyUI가 제공하는 테마 시스템을 활용하여 일관된 디자인을 유지하고, 라이트/다크 모드 등을 쉽게 지원합니다.
+*   **시맨틱 컬러 사용**: DaisyUI의 시맨틱 컬러 이름(`primary`, `secondary`, `accent`, `base-100`, `text-base-content` 등)을 사용하여 테마 변경 시 색상이 자동으로 적응되도록 합니다.
+
+## 8. 개발 단계 (Iterative Approach)
+
+*   **0단계: 환경 설정 및 기본 타입 정의**
+    *   Vite + React + TS 프로젝트 생성.
+    *   Supabase 프로젝트 설정, CLI 연동.
+    *   `package.json`에 필요 라이브러리 추가: `tailwindcss`, `daisyui`, Supabase 클라이언트, Zustand, React Router, XState 등.
+    *   Tailwind CSS 및 DaisyUI 설정:
+        *   메인 CSS 파일 (예: `src/index.css` 또는 `src/App.css`)에 `@import "tailwindcss";` 와 `@plugin "daisyui";` 추가.
+    *   기본적인 DB 스키마 정의 및 Supabase 마이그레이션 설정.
+    *   `types/supabase.ts` 생성. `types/game.ts` 기본 정의.
+*   **1단계: 인증 및 로비 기능**
+    *   Supabase Auth 연동 (로그인, 회원가입).
+    *   로비 UI: 게임방 생성 (DB 저장), 목록 조회 (DB 읽기), 참여 기능 (플레이어 정보 DB 저장).
+*   **2단계: 핵심 게임 로직 (로컬 우선)**
+    *   `utils/deck.ts`, `utils/handEvaluator.ts` 핵심 로직 구현 및 단위 테스트.
+        *   카드 셔플, 분배.
+        *   족보 판정 (다양한 케이스 테스트 중요).
+*   **3단계: 기본 게임 흐름 UI 및 Supabase 연동 (1라운드)**
+    *   `GamePage.tsx` 기본 레이아웃 (DaisyUI 컴포넌트 활용).
+    *   게임 시작 시 카드 분배 (개인, 공유 1차), DB 업데이트 및 UI 반영 (Realtime) - UI는 DaisyUI로 구성.
+    *   기본 베팅 로직 (DaisyUI `btn` 등 활용한 UI 버튼, DB 업데이트 - 초기엔 클라이언트에서 직접, 이후 Function으로 이전).
+    *   1차 베팅 후 공유 카드 추가 공개, 2차 베팅 (UI는 DaisyUI로 구성).
+    *   라운드 종료 후 수동으로 승자 판정 (UI에서 결과 확인, DB 업데이트는 추후).
+*   **4단계: 상세 게임 규칙 구현 (Supabase Functions 활용)**
+    *   베팅 규칙 (상한선, 최소 레이즈 등) Function으로 구현.
+    *   저격 시스템 UI (DaisyUI `modal`, `input` 등 활용) 및 Function 구현.
+    *   승자 판정 및 팟 분배 Function 자동화.
+    *   동점자 처리 규칙 완벽 구현.
+*   **5단계: 생존 및 게임 종료 조건 구현**
+    *   생존 확정 UI (DaisyUI `modal` 등 활용) 및 Function 구현 (칩 분배 포함).
+    *   칩 부족 시 플레이어 탈락 처리.
+    *   게임 종료 조건 판별 및 결과 처리.
+*   **6단계: UI/UX 개선 및 폴리싱**
+    *   애니메이션, 사운드 효과 추가.
+    *   반응형 디자인 점검.
+    *   전반적인 사용성 개선.
+    *   게임 로그 표시 기능.
+*   **7단계: 테스트 및 버그 수정**
+    *   다양한 시나리오 테스트 (플레이어 수, 특수 규칙 발동 등).
+    *   엣지 케이스 테스트.
+    *   사용자 테스트 피드백 반영.
+*   **8단계: 배포**
+    *   Vercel, Netlify 등 정적 호스팅 서비스에 프론트엔드 배포.
+    *   Supabase Functions 배포.
+
+## 9. 추가 고려 사항
+
+*   **에러 처리**: 네트워크 오류, DB 오류, 잘못된 사용자 입력 등에 대한 견고한 에러 처리.
+*   **보안**: 모든 DB 변경 작업은 가능한 Supabase Functions를 통해 수행하고, RLS(Row Level Security) 철저히 설정. 입력값 유효성 검사.
+*   **확장성**: 향후 새로운 게임 모드나 규칙 추가 가능성을 염두에 둔 모듈화된 코드 구조.
+*   **최적화**: Realtime 구독 최소화, 불필요한 리렌더링 방지 등 성능 최적화.
+*   **테스트 코드**: Jest, React Testing Library 등을 이용한 단위/통합 테스트 작성.
+*   **타임아웃**: 플레이어 턴 타임아웃 기능 (선택 사항).
+
