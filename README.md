@@ -103,21 +103,34 @@ src/
 - `.env.local` - 로컬 개발용 환경 변수 (Git 무시됨)
 - `.env.example` - 환경 변수 템플릿 (Git에 포함됨)
 
+## 🚀 배포
+
+프로덕션 환경에 배포할 때는 다음을 확인하세요:
+
+1. **환경 변수 설정**: 배포 플랫폼에 Supabase 자격 증명 설정
+2. **빌드 최적화**: `npm run build` 실행하여 최적화된 빌드 생성
+3. **데이터베이스**: Supabase 프로젝트가 프로덕션 환경에 맞게 설정되었는지 확인
+
+### Vercel 배포 (권장)
+
+```bash
+# Vercel CLI 설치
+npm i -g vercel
+
+# 프로젝트 배포
+vercel
+
+# 환경 변수는 Vercel 대시보드에서 설정
+```
+
+## 🤝 기여하기
+
+1. 이 저장소를 포크합니다
+2. 새로운 기능 브랜치를 생성합니다 (`git checkout -b feature/AmazingFeature`)
+3. 변경사항을 커밋합니다 (`git commit -m 'Add some AmazingFeature'`)
+4. 브랜치에 푸시합니다 (`git push origin feature/AmazingFeature`)
+5. Pull Request를 생성합니다
+
 ## 📝 라이선스
 
 이 프로젝트는 개인 프로젝트입니다.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
